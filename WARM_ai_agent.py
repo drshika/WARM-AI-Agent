@@ -1,137 +1,125 @@
-import pyodbc
-import openai
 from typing import List, Dict, Any
 import os
 from dotenv import load_dotenv
+from sqlalchemy import text
+from langchain_core.prompts import SystemMessagePromptTemplate, HumanMessagePromptTemplate, ChatPromptTemplate
+from langchain_community.agent_toolkits.sql.base import create_sql_agent
+from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
+from langchain_community.utilities import SQLDatabase
+from langchain_openai import ChatOpenAI
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.prompts import ChatPromptTemplate
 
+def extract_sql_query(response: str) -> str:
+    """Extract SQL query from the agent's response"""
+    # Look for SQL between triple backticks
+    import re
+    sql_match = re.search(r"```sql\n(.*?)\n```", response, re.DOTALL)
+    if sql_match:
+        return sql_match.group(1).strip()
+    return None
 class SQLAIAgent:
     def __init__(self, connection_string: str, openai_api_key: str):
         """Initialize the SQL AI Agent with database connection and OpenAI credentials"""
+        self.system_prompt = """You are an expert with Microsoft SQL Server. Your role is to help users retrieve information from a database.
+        
+        Important Rules:
+        1. You can ONLY execute SELECT queries
+        2. You cannot perform any INSERT, UPDATE, DELETE, DROP, or other data modification operations
+        3. If a user requests any data modification, politely explain that you can only help with reading data
+        4. Always explain the Microsoft SQL Server query you're using in simple terms
+        
+        Current Database Schema:
+        {schema}
+        """
         self.connection_string = connection_string
-        openai.api_key = openai_api_key
+        self.openai_api_key = openai_api_key
         self.conn = None
         self.cursor = None
         
     def connect(self):
-        """Establish connection to the MS SQL database"""
         try:
-            self.conn = pyodbc.connect(self.connection_string)
-            self.cursor = self.conn.cursor()
+            connection_params = {
+                "driver": "ODBC Driver 18 for SQL Server",
+                "TrustServerCertificate": "yes",
+                "timeout": "60",
+                "connection_timeout": "60"
+            }
+            
+            params = "&".join(f"{key}={value}" for key, value in connection_params.items())
+            sqlalchemy_url = f"mssql+pyodbc:///?odbc_connect={self.connection_string}&{params}"
+            
+            # Initialize database
+            self.db = SQLDatabase.from_uri(sqlalchemy_url)
+            
+            # Initialize LLM 
+            llm = ChatOpenAI(temperature=0, api_key=self.openai_api_key, model="gpt-4o-mini")
+            
+            # Create custom prompt
+            self.prompt = ChatPromptTemplate.from_messages([
+                ("system", self.system_prompt.format(schema=self.db.get_table_info())),
+                ("human", "{question}")
+            ])
+
+            # Create the LCEL chain
+            self.chain = (
+                {"question": RunnablePassthrough()} 
+                | self.prompt 
+                | llm 
+                | StrOutputParser()
+            )
+
+            # Create toolkit and agent per documentation
+            toolkit = SQLDatabaseToolkit(db=self.db, llm=llm)
+            self.agent_executor = create_sql_agent(
+                llm=llm,
+                toolkit=toolkit,
+                verbose=True,
+                agent_type="tool-calling"
+            )
+
             print("Successfully connected to the database")
+            
         except Exception as e:
             print(f"Error connecting to database: {str(e)}")
-            
-    def disconnect(self):
-        """Close database connection"""
-        if self.cursor:
-            self.cursor.close()
-        if self.conn:
-            self.conn.close()
+            raise
 
-    def get_table_schema(self) -> str:
-        """Get the schema information for relevant tables"""
+    def execute_sql(self, query: str) -> List[Dict[str, Any]]:
+        """Execute a raw SQL query and return results"""
         try:
-            # Query to get column information for tables
-            schema_query = """
-            SELECT 
-                t.name AS TableName,
-                c.name AS ColumnName,
-                ty.name AS DataType
-            FROM sys.tables t
-            INNER JOIN sys.columns c ON t.object_id = c.object_id
-            INNER JOIN sys.types ty ON c.user_type_id = ty.user_type_id
-            ORDER BY t.name, c.column_id;
-            """
-            self.cursor.execute(schema_query)
-            schema_info = []
-            for row in self.cursor.fetchall():
-                schema_info.append(f"Table: {row[0]}, Column: {row[1]}, Type: {row[2]}")
-            return "\n".join(schema_info)
+            # Execute the query using SQLAlchemy
+            with self.db._engine.connect() as connection:
+                result = connection.execute(text(query))
+                # Convert results to list of dictionaries
+                columns = result.keys()
+                return [dict(zip(columns, row)) for row in result.fetchall()]
         except Exception as e:
-            print(f"Error getting schema: {str(e)}")
+            print(f"Error executing SQL query: {str(e)}")
             return None
-            
-    def generate_sql_query(self, user_prompt: str) -> str:
-        """Generate SQL query using OpenAI"""
+
+    def query(self, question: str) -> Dict[str, Any]:
+        """Execute a natural language query using the SQL agent"""
         try:
-            # Get schema information first
-            schema_info = self.get_table_schema()
+            # First attempt with simple LCEL chain
+            response = self.chain.invoke(question)
             
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {
-                        "role": "system", 
-                        "content": """You are a SQL expert for Microsoft SQL Server. Generate only the SQL query without any explanation.
-                        Use SQL Server specific functions like GETDATE() instead of MySQL functions.
-                        Here is the database schema:
-                        """ + schema_info
-                    },
-                    {"role": "user", "content": user_prompt}
-                ]
-            )
-            return response.choices[0].message.content.strip()
-        except Exception as e:
-            print(f"Error generating SQL query: {str(e)}")
-            return None
-            
-    def execute_query(self, query: str) -> List[Dict[Any, Any]]:
-        """Execute SQL query and return results"""
-        try:
-            self.cursor.execute(query)
-            columns = [column[0] for column in self.cursor.description]
-            results = []
-            
-            for row in self.cursor.fetchall():
-                results.append(dict(zip(columns, row)))
+            # If the response doesn't contain SQL or seems incomplete,
+            # fall back to the more complex agent
+            if "SELECT" not in response.upper():
+                response = self.agent_executor.invoke({"input": question})
                 
-            return results
+            return response
         except Exception as e:
             print(f"Error executing query: {str(e)}")
             return None
-            
-    def process_natural_language_query(self, user_prompt: str) -> List[Dict[Any, Any]]:
-        """Process natural language query and return results"""
-        # Generate SQL query from natural language
-        sql_query = self.generate_sql_query(user_prompt)
         
-        if sql_query:
-            results = self.execute_query(sql_query)
-            print(results)
-            if results:
-                # If we have multiple results
-                if len(results) > 1:
-                    # Extract numeric values for statistics
-                    numeric_values = []
-                    for row in results:
-                        for value in row.values():
-                            # Try to convert to float if possible
-                            try:
-                                numeric_values.append(float(str(value).strip()))
-                            except (ValueError, TypeError):
-                                continue
-                    
-                    if numeric_values:
-                        avg = sum(numeric_values) / len(numeric_values)
-                        max_val = max(numeric_values)
-                        min_val = min(numeric_values)
-                        formatted_result = (
-                            f"Based on {len(results)} measurements, "
-                            f"the average was {avg:.2f}, "
-                            f"ranging from {min_val:.2f} to {max_val:.2f}"
-                        )
-                    else:
-                        # If no numeric values found, just join the results
-                        values = [f"{k.strip()}: {str(v).strip()}" for row in results for k, v in row.items()]
-                        formatted_result = f"Found {len(results)} results: " + ", ".join(values)
-                else:
-                    # Single result handling (unchanged)
-                    formatted_result = "Based on the data, "
-                    values = [f"{k.strip()}: {str(v).strip()}" for k, v in results[0].items()]
-                    formatted_result += ", ".join(values)
-                
-                return formatted_result.replace('\n', ' ').replace('\r', '')
-        return "No results found for your query."
+    def disconnect(self):
+        """Close database connection"""
+        if hasattr(self, 'db') and self.db:
+            # Access the engine through _engine attribute
+            if hasattr(self.db, '_engine'):
+                self.db._engine.dispose()
 
 def main():
     print("Starting WARM AI Agent...")
@@ -153,19 +141,30 @@ def main():
     print("Connecting to database...")
     agent.connect()
 
-    print("Processing natural language query...")
-    # Example natural language query
-    results = agent.process_natural_language_query("What was the air on july 16th in 2010?")
+    while True:
+        # Get user input
+        user_query = input("\nEnter your question (or 'quit' to exit): ")
+        
+        # Check for exit condition
+        if user_query.lower() in ['quit', 'exit', 'q']:
+            break
+        
+        # Check for user running query
+        if user_query.lower() in ['run', 'run query', 'execute', 'execute query']:
+            response = agent.query(user_query)
+            
 
-    if results:
-        print("Query results:")
-        print(results)
-    else:
-        print("No results returned from query")
+        print("\nProcessing natural language query...")
+        results = agent.query(user_query)
 
-    print("Disconnecting from database...")
-    agent.disconnect()
-    print("Done.")
+        if results:
+            print("\nProposed response:")
+            print(results)
+            
+            # Allow user to verify and continue
+            verify = input("\nWould you like to ask another question? (y/n): ")
+            if verify.lower() not in ['y', 'yes']:
+                break
 
 if __name__ == "__main__":
     main()
