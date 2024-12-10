@@ -79,11 +79,11 @@ To find out how many days in 2010 had an air temperature of 10°C, we can query 
 
 Here’s the SQL query that accomplishes this:
 
-```sql
+---
 SELECT COUNT(DISTINCT CAST(nDateTime AS DATE)) AS DaysAt10C
 FROM WarmICNData
 WHERE nAirTemp = 10 AND YEAR(nDateTime) = 2010;
-```
+---
 
 ### Explanation:
 - `SELECT COUNT(DISTINCT CAST(nDateTime AS DATE))`: This part counts the unique days (dates) where the temperature was exactly 10°C.
