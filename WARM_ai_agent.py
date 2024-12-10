@@ -11,6 +11,12 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.prompts import ChatPromptTemplate
 
+# TODO: Add a mapping for location codes to counties/zip codes in IL
+# TODO: Adding a structured output parser for SQL queries
+# TODO: Including a SQL validation step in the chain
+# TODO: Adding retry logic or error handling chains 
+# TODO: Implementing a query classification chain to choose between simple and complex processing
+
 def extract_sql_query(response: str) -> str:
     """Extract SQL query from the agent's response"""
     # Look for SQL between triple backticks
@@ -148,11 +154,28 @@ def main():
         # Check for exit condition
         if user_query.lower() in ['quit', 'exit', 'q']:
             break
+
         
-        # Check for user running query
-        if user_query.lower() in ['run', 'run query', 'execute', 'execute query']:
-            response = agent.query(user_query)
+            # make this part actually make sense
+            # if response:
+            # print("\nProposed response:")
+            # print(response)
             
+            # # Extract SQL query if present
+            # sql_query = extract_sql_query(response)
+            # if sql_query:
+            #     verify = input("\nWould you like to execute this SQL query? (y/n): ")
+            #     if verify.lower() in ['y', 'yes']:
+            #         print("\nExecuting query...")
+            #         results = agent.execute_sql(sql_query)
+            #         if results:
+            #             print("\nQuery Results:")
+            #             for row in results:
+            #                 print(row)
+            
+            # continue_session = input("\nWould you like to ask another question? (y/n): ")
+            # if continue_session.lower() not in ['y', 'yes']:
+            #     break
 
         print("\nProcessing natural language query...")
         results = agent.query(user_query)
@@ -161,6 +184,18 @@ def main():
             print("\nProposed response:")
             print(results)
             
+            # Extract SQL query if present
+            sql_query = extract_sql_query(results)
+            if sql_query:
+                verify = input("\nWould you like to execute this SQL query? (y/n): ")
+                if verify.lower() in ['y', 'yes']:
+                    print("\nExecuting query...")
+                    results = agent.execute_sql(sql_query)
+                    if results:
+                        print("\nQuery Results:")
+                        for row in results:
+                            print(row)
+
             # Allow user to verify and continue
             verify = input("\nWould you like to ask another question? (y/n): ")
             if verify.lower() not in ['y', 'yes']:

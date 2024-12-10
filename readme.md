@@ -4,12 +4,19 @@ A Python-based AI agent that interfaces with a Microsoft SQL Server database (WA
 
 ## Features
 
-- Natural language to SQL query conversion using GPT-3.5
-- Automatic database schema detection and analysis
-- Statistical analysis of numeric query results
+- Dual-approach query processing system:
+  - Fast LCEL (LangChain Expression Language) chain for simple queries
+  - Comprehensive SQL agent for complex queries
+- Natural language to SQL query conversion using GPT-4o-mini
+- Interactive query verification before execution
+- Automatic database schema detection and integration
 - Secure database connection handling with Kerberos authentication
-- Formatted result output with data summaries
+- Built-in safety constraints:
+  - Read-only operations (SELECT queries only)
+  - No data modification capabilities
+  - Query verification prompts
 - Comprehensive error handling and logging
+- Custom prompt templates for accurate SQL generation
 
 ## Prerequisites
 
@@ -46,40 +53,70 @@ OPENAI_API_KEY=your_openai_api_key
 ```bash
 kinit   {netid}@AD.UILLINOIS.EDU
 ```
-2. Edit natural language queries in `main()` function
-3. Run the agent:
+
+2. Run the agent:
 ```bash
 python WARM_ai_agent.py
 ```
 
+3. Enter your questions in natural language when prompted. Type 'quit' to exit.
+
 EXAMPLE:
 
 ```python
-> python3 WARM_ai_agent.py 
+> python3 WARM_ai_agent.py
 Starting WARM AI Agent...
 Initializing agent with connection string...
 Connecting to database...
 Successfully connected to the database
+
+Enter your question (or 'quit' to exit): how many days in 2010 was it 10c
+
 Processing natural language query...
-[{'nAirTemp': Decimal('19.8000')}, {'nAirTemp': Decimal('19.0200')}, {'nAirTemp': Decimal('19.2200')}, {'nAirTemp': Decimal('18.4800')}, {'nAirTemp': Decimal('18.8200')}, {'nAirTemp': Decimal('18.3600')}, {'nAirTemp': Decimal('18.4000')}, {'nAirTemp': Decimal('18.1200')}, {'nAirTemp': Decimal('18.6900')}, {'nAirTemp': Decimal('17.7000')}, {'nAirTemp': Decimal('18.3500')}, {'nAirTemp': Decimal('18.3700')}, {'nAirTemp': Decimal('18.4400')}, {'nAirTemp': Decimal('20.8300')}, {'nAirTemp': Decimal('20.7500')}, {'nAirTemp': Decimal('21.5500')}, {'nAirTemp': Decimal('23.7400')}, {'nAirTemp': Decimal('24.5000')}, {'nAirTemp': Decimal('26.2900')}, {'nAirTemp': Decimal('26.0000')}, {'nAirTemp': Decimal('27.1000')}, {'nAirTemp': Decimal('27.1500')}, {'nAirTemp': Decimal('27.8400')}, {'nAirTemp': Decimal('28.4300')}, {'nAirTemp': Decimal('29.6800')}, {'nAirTemp': Decimal('28.6000')}, {'nAirTemp': Decimal('29.4700')}, {'nAirTemp': Decimal('30.0000')}, {'nAirTemp': Decimal('29.3200')}, {'nAirTemp': Decimal('29.8700')}, {'nAirTemp': Decimal('30.2400')}, {'nAirTemp': Decimal('29.6900')}, {'nAirTemp': Decimal('30.0900')}, {'nAirTemp': Decimal('30.5500')}, {'nAirTemp': Decimal('30.0700')}, {'nAirTemp': Decimal('30.1800')}, {'nAirTemp': Decimal('30.5400')}, {'nAirTemp': Decimal('29.9700')}, {'nAirTemp': Decimal('29.8500')}, {'nAirTemp': Decimal('30.2200')}, {'nAirTemp': Decimal('29.9000')}, {'nAirTemp': Decimal('29.5800')}, {'nAirTemp': Decimal('29.2600')}, {'nAirTemp': Decimal('29.2800')}, {'nAirTemp': Decimal('28.8600')}, {'nAirTemp': Decimal('27.5800')}, {'nAirTemp': Decimal('27.8200')}, {'nAirTemp': Decimal('27.4700')}, {'nAirTemp': Decimal('24.4800')}, {'nAirTemp': Decimal('25.7300')}, {'nAirTemp': Decimal('25.6600')}, {'nAirTemp': Decimal('23.2900')}, {'nAirTemp': Decimal('23.5000')}, {'nAirTemp': Decimal('23.5600')}, {'nAirTemp': Decimal('22.1100')}, {'nAirTemp': Decimal('22.6000')}, {'nAirTemp': Decimal('22.4800')}, {'nAirTemp': Decimal('20.6800')}, {'nAirTemp': Decimal('21.8600')}, {'nAirTemp': Decimal('21.9400')}]
-Query results:
-Based on 60 measurements, the average was 25.03, ranging from 17.70 to 30.55
-Disconnecting from database...
-Done.
+
+Proposed response:
+To find out how many days in 2010 had an air temperature of 10°C, we can query the `WarmICNData` table, specifically looking for records where the `nAirTemp` is equal to 10. We will also need to filter the results to only include the year 2010 and group the results by date to count the unique days.
+
+Here’s the SQL query that accomplishes this:
+
+```sql
+SELECT COUNT(DISTINCT CAST(nDateTime AS DATE)) AS DaysAt10C
+FROM WarmICNData
+WHERE nAirTemp = 10 AND YEAR(nDateTime) = 2010;
+```
+
+### Explanation:
+- `SELECT COUNT(DISTINCT CAST(nDateTime AS DATE))`: This part counts the unique days (dates) where the temperature was exactly 10°C.
+- `FROM WarmICNData`: This specifies the table we are querying.
+- `WHERE nAirTemp = 10`: This filters the records to only include those where the air temperature is 10°C.
+- `AND YEAR(nDateTime) = 2010`: This further filters the records to only include those from the year 2010.
+
+You can run this query to get the number of days in 2010 when the temperature was 10°C.
+
+Would you like to execute this SQL query? (y/n): y
+
+Executing query...
+
+Query Results:
+{'DaysAt10C': 3}
+
+Would you like to ask another question? (y/n): n
 ```
 
 ## Key Components
 
 ### SQLAIAgent Class
 - Manages database connections and AI interactions
-- Handles schema detection and query generation
-- Provides statistical analysis of results
+- Implements both simple and complex query processing chains
+- Uses LangChain Expression Language (LCEL) for efficient query processing
+- Falls back to more complex agent for complicated queries
+- Provides SQL query verification before execution
 
 ### Main Functions
-- `generate_sql_query()`: Converts natural language to SQL using GPT-3.5
-- `execute_query()`: Safely executes SQL queries with error handling
-- `process_natural_language_query()`: Processes queries and provides analytical results
-- `get_table_schema()`: Automatically detects and formats database schema
+- `query()`: Processes natural language queries using AI
+- `execute_sql()`: Safely executes verified SQL queries
+- `extract_sql_query()`: Extracts SQL queries from AI responses
+- `connect()`: Establishes database connection with proper configuration
 
 ## Security Features
 
@@ -98,12 +135,17 @@ The agent includes comprehensive error handling for:
 - Schema detection failures
 - Data type conversion errors
 
-## Statistical Analysis
+## AI Implementation
 
-For numeric results, the agent automatically calculates:
-- Average values
-- Minimum and maximum ranges
-- Result count and summaries
+The agent uses a dual-approach system for query processing:
+1. Simple LCEL chain for straightforward queries
+2. Complex SQL agent for more sophisticated requests
+
+The system uses:
+- OpenAI's GPT-4-mini model for query understanding
+- LangChain's SQL Database Toolkit
+- Custom prompt templates for accurate SQL generation
+- Interactive query verification system
 
 ## Contributing
 
